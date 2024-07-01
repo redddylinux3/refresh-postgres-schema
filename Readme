@@ -1,0 +1,111 @@
+Below is a Python script that outlines the steps you mentioned. This script covers the automation of the pg_dump process for each database, creates a comparison using Beyond Compare, deploys the script to a test database, and then applies it to the production database.
+
+Pre-requisites:
+Ensure that psycopg2 is installed: pip install psycopg2-binary
+Ensure that pg_dump and psql are available in your PATH.
+Beyond Compare must be installed and available in the system's PATH for automated comparisons.
+Python Script
+python
+Copy code
+import os
+import subprocess
+import psycopg2
+from shutil import copyfile
+
+# Configuration
+testing_db_config = {
+    'dbname': 'your_testing_db',
+    'user': 'your_testing_user',
+    'password': 'your_testing_password',
+    'host': 'localhost',
+    'port': '5432'
+}
+
+production_db_config = {
+    'dbname': 'your_production_db',
+    'user': 'your_production_user',
+    'password': 'your_production_password',
+    'host': 'localhost',
+    'port': '5432'
+}
+
+test_db_config = {
+    'dbname': 'your_test_db',
+    'user': 'your_test_user',
+    'password': 'your_test_password',
+    'host': 'localhost',
+    'port': '5432'
+}
+
+def run_pg_dump(db_config, output_file):
+    os.environ['PGPASSWORD'] = db_config['password']
+    dump_command = (
+        f"pg_dump --host={db_config['host']} --port={db_config['port']} --username={db_config['user']} "
+        f"--dbname={db_config['dbname']} --file={output_file}"
+    )
+    os.system(dump_command)
+
+def run_psql(db_config, sql_file):
+    os.environ['PGPASSWORD'] = db_config['password']
+    command = (
+        f"psql --host={db_config['host']} --port={db_config['port']} --username={db_config['user']} "
+        f"--dbname={db_config['dbname']} --file={sql_file}"
+    )
+    os.system(command)
+
+def beyond_compare(file1, file2, output_file):
+    # Ensure Beyond Compare is installed and available in PATH
+    command = f"bcompare.exe {file1} {file2} /mergeoutput={output_file}"
+    os.system(command)
+
+def create_test_db(db_config):
+    try:
+        conn = psycopg2.connect(
+            dbname="postgres",
+            user=db_config['user'],
+            password=db_config['password'],
+            host=db_config['host'],
+            port=db_config['port']
+        )
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(f"DROP DATABASE IF EXISTS {db_config['dbname']}")
+        cur.execute(f"CREATE DATABASE {db_config['dbname']}")
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error creating test database: {e}")
+
+def main():
+    testing_dump_file = 'testing_dump.sql'
+    production_dump_file = 'production_dump.sql'
+    merged_file = 'merged_dump.sql'
+    test_run_file = 'test_run.sql'
+
+    # Step 1: Run pgdump on each database
+    run_pg_dump(testing_db_config, testing_dump_file)
+    run_pg_dump(production_db_config, production_dump_file)
+
+    # Step 2: Use Beyond Compare to merge the two dumps
+    beyond_compare(testing_dump_file, production_dump_file, merged_file)
+
+    # Step 3: Create a new test DB and run the merged script
+    create_test_db(test_db_config)
+    copyfile(merged_file, test_run_file)
+    run_psql(test_db_config, test_run_file)
+
+    # Step 4: If test runs successfully, wipe out the target DB and run the script against it
+    # Note: Ensure you have a backup of the production database before running this step
+    run_psql(production_db_config, test_run_file)
+
+    # Step 5: Notify the user to take applications offline and merge additional data changes if needed
+
+if __name__ == "__main__":
+    main()
+Notes:
+Beyond Compare: The script assumes that Beyond Compare (bcompare.exe) is available in the system's PATH and can be called directly from the command line. Adjust the command accordingly if you are using a different comparison tool or have a different setup.
+Backup: Ensure that you have a full backup of your production database before running any scripts that modify the database.
+Database Credentials: For security reasons, consider using environment variables or secure credential management tools instead of hardcoding passwords in the script.
+Testing: Always test this script in a non-production environment before applying it to production to ensure it works as expected.
+Manual Steps: The script outlines steps to take applications offline and merge additional data changes manually, as these actions may require careful handling specific to your environment.
+This script provides a comprehensive approach to managing schema changes across different PostgreSQL environments while ensuring the integrity of your production data.
