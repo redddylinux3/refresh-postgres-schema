@@ -1,0 +1,131 @@
+import subprocess
+import os
+
+def deploy_database_changes(source_host, source_user, source_password, source_db_name, target_host, target_user, target_password, target_db_name, temp_dump_file="temp_dump.sql"):
+  """
+  Deploys schema and data changes from a source database to a target database.
+
+  **WARNING**: This script performs potentially destructive operations. Use with caution and in a controlled environment.
+
+  Args:
+      source_host (str): Hostname of the source PostgreSQL server.
+      source_user (str): Username for connecting to the source database.
+      source_password (str): Password for connecting to the source database.
+      source_db_name (str): Name of the source database.
+      target_host (str): Hostname of the target PostgreSQL server.
+      target_user (str): Username for connecting to the target database.
+      target_password (str): Password for connecting to the target database.
+      target_db_name (str): Name of the target database.
+      temp_dump_file (str, optional): Path to a temporary dump file (defaults to "temp_dump.sql").
+  """
+
+  # 1. Run pg_dump on the source database
+  source_dump_cmd = f"pg_dump -h {source_host} -U {source_user} -W {source_password} {source_db_name} > {temp_dump_file}"
+  subprocess.run(source_dump_cmd.split(), check=True)
+
+  # 2. Manual merge using Beyond Compare (or similar tool) is recommended for ALTER and data changes
+
+  # 3. Create a new test database (assuming tool like pg_dumpall exists)
+  create_test_db_cmd = f"pg_dumpall -h {target_host} -U {target_user} -W {target_password} -d template1 > create_test_db.sql && psql -h {target_host} -U {target_user} -W {target_password} -f create_test_db.sql"
+  subprocess.run(create_test_db_cmd.split(), check=True)
+  new_target_db_name = f"{target_db_name}_test"  # Modify if desired
+
+  # 4. Deploy script to the new test database (assuming script is in the same directory)
+  deploy_script_cmd = f"psql -h {target_host} -U {target_user} -W {target_password} -d {new_target_db_name} < {temp_dump_file}"
+  subprocess.run(deploy_script_cmd.split(), check=True)
+
+  # 5. Prompt for confirmation before dropping and deploying to target (application offline!)
+  confirmation = input(f"**WARNING**: This will drop and recreate the target database '{target_db_name}'. Are you sure you want to continue? (y/N): ")
+  if confirmation.lower() == 'y':
+    # Ensure applications are offline
+    print("**Ensure all applications using the database are offline!**")
+
+    # 6. Optional: Capture additional data changes (if applicable)
+    additional_data_dump_cmd = f"pg_dump -h {target_host} -U {target_user} -W {target_password} {target_db_name} > additional_data.sql"
+    subprocess.run(additional_data_dump_cmd.split(), check=True)
+
+    # Drop target database
+    drop_target_db_cmd = f"psql -h {target_host} -U {target_user} -W {target_password} -c \"DROP DATABASE {target_db_name}\""
+    subprocess.run(drop_target_db_cmd.split(), check=True)
+
+    # Deploy script to target database
+    deploy_script_cmd = f"psql -h {target_host} -U {target_user} -W {target_password} -d {target_db_name} < {temp_dump_file}"
+    subprocess.run(deploy_script_cmd.split(), check=True)
+
+    # Optionally, merge additional data changes
+    if os.path.exists("additional_data.sql"):
+      print("Merging additional data changes...")
+      # Implement logic to merge additional_data.sql into the deployed database using psql or a similar tool
+
+  else:
+    
+------------------------------------------------------
+I have two servers: production and testing. Both of them run PostgreSQL. I made a lot of alterations on testing server, like ALTER table, CREATE INDEX etc. and want to transfer these alterations to the production server as easy as possible. What is the most convenient way for this using python script
+volume_up
+
+Here's a Python script approach to transfer schema alterations from your testing PostgreSQL server to the production server in a convenient way. However, it's important to exercise caution and conduct thorough testing before applying changes to production.
+
+Script Breakdown:
+
+Python
+import psycopg2
+
+def transfer_schema_changes(testing_db_name, testing_user, testing_password, testing_host="localhost", testing_port=5432,
+                             production_db_name="production_db", production_user="production_user", production_password="production_password", production_host="localhost", production_host=5432):
+  """
+  Transfers schema changes from a testing PostgreSQL server to a production server.
+
+  **WARNING**: Use with caution and thoroughly test changes in a staging environment before applying to production.
+
+  Args:
+      testing_db_name (str): Name of the database on the testing server.
+      testing_user (str): Username for connecting to the testing database.
+      testing_password (str): Password for connecting to the testing database.
+      testing_host (str, optional): Hostname of the testing PostgreSQL server (defaults to "localhost").
+      testing_port (int, optional): Port number of the testing PostgreSQL server (defaults to 5432).
+      production_db_name (str, optional): Name of the database on the production server (defaults to "production_db").
+      production_user (str, optional): Username for connecting to the production database (defaults to "production_user").
+      production_password (str, optional): Password for connecting to the production database (defaults to "production_password").
+      production_host (str, optional): Hostname of the production PostgreSQL server (defaults to "localhost").
+      production_port (int, optional): Port number of the production PostgreSQL server (defaults to 5432).
+  """
+  conn_testing = None
+  conn_production = None
+  try:
+    # Connect to testing and production databases
+    conn_testing = psycopg2.connect(dbname=testing_db_name, user=testing_user, password=testing_password, host=testing_host, port=testing_port)
+    cur_testing = conn_testing.cursor()
+
+    # Capture schema changes from testing server
+    cur_testing.execute("SELECT sql FROM pg_catalog.pg_stat_all_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')")
+    changes = cur_testing.fetchall()
+
+    # Connect to production server
+    conn_production = psycopg2.connect(dbname=production_db_name, user=production_user, password=production_password, host=production_host, port=production_port)
+    cur_production = conn_production.cursor()
+
+    # Apply schema changes to production server (**WARNING**: Test in staging first!)
+    for change in changes:
+      sql_statement = change[0]
+      print(f"Executing: {sql_statement}")  # Print for review before execution (optional)
+      # cur_production.execute(sql_statement)  # Uncomment to execute changes
+
+    # Commit changes on production (**ONLY UNCOMMENT after thorough testing!)
+    # conn_production.commit()
+    print("Schema changes transferred (**NOT YET APPLIED**). Please review output and commit manually if desired.")
+
+  except Exception as e:
+    print(f"Error transferring schema changes: {e}")
+  finally:
+    if conn_testing:
+      conn_testing.close()
+    if conn_production:
+      conn_production.close()
+
+# Example usage (replace with your actual credentials)
+testing_db_name = "your_testing_db"
+testing_user = "your_testing_user"
+testing_password = "your_testing_password"
+# ... other connection details
+
+transfer_schema_changes(testing_db_name, testing_user, testing_password, production_db_name="production_db", production_user="production_user", production_password="production_password")
